@@ -1,8 +1,8 @@
 This is a slighted modified version of EG3D that is compatible with the LPFF dataset. We made the following modifications:
 
-1. Modified `./trained/dataset.py` so that it iterates the dataset according to our file name list.
+1. Modified `./training/dataset.py` so that it iterates the dataset according to our file name list.
 2. Modified metric computation code so that it can compute our novel FID metrics.
-3. Modified `./trained/training_loop.py` (did not affect training)
+3. Modified `./training/training_loop.py` (did not affect training)
 4. Added a `gen_pose_cond_avg` option that enable the generator pose conditioning on the average camera. Added a `camera_sample_mode`  option that sets camera sample mode.  
 5. Fixed the tri-plane as the [issue](https://github.com/NVlabs/eg3d/issues/67) suggested to accurately accomplish the XY, XZ, ZY projections in EG3D paper.
 
