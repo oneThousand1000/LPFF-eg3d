@@ -44,10 +44,19 @@ class TriPlaneGenerator(torch.nn.Module):
         self.rendering_kwargs = rendering_kwargs
     
         self._last_planes = None
+        self.average_camera = torch.FloatTensor([[1.0000e+00, 2.2291e-15, 4.7206e-08, -1.1805e-07, 0.0000e+00,
+                                    -1.0000e+00, 4.7206e-08, -1.1805e-07, 4.7206e-08, -4.7206e-08,
+                                    -1.0000e+00, 2.6992e+00, 0.0000e+00, 0.0000e+00, 0.0000e+00,
+                                    1.0000e+00, 4.2647e+00, 0.0000e+00, 5.0000e-01, 0.0000e+00,
+                                    4.2647e+00, 5.0000e-01, 0.0000e+00, 0.0000e+00, 1.0000e+00]])
     
     def mapping(self, z, c, truncation_psi=1, truncation_cutoff=None, update_emas=False):
         if self.rendering_kwargs['c_gen_conditioning_zero']:
-                c = torch.zeros_like(c)
+            c = torch.zeros_like(c)
+        if self.rendering_kwargs['c_gen_conditioning_avg']:
+            c = self.average_camera.to(c.device).repeat(c.shape[0], 1)
+
+
         return self.backbone.mapping(z, c * self.rendering_kwargs.get('c_scale', 0), truncation_psi=truncation_psi, truncation_cutoff=truncation_cutoff, update_emas=update_emas)
 
     def synthesis(self, ws, c, neural_rendering_resolution=None, update_emas=False, cache_backbone=False, use_cached_backbone=False, **synthesis_kwargs):

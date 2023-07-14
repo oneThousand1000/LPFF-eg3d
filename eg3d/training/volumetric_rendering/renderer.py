@@ -19,7 +19,24 @@ import torch.nn as nn
 
 from training.volumetric_rendering.ray_marcher import MipRayMarcher2
 from training.volumetric_rendering import math_utils
+# =============== XY, XZ, ZX projections ===========
+# def generate_planes():
+#     """
+#     Defines planes by the three vectors that form the "axes" of the
+#     plane. Should work with arbitrary number of planes and planes of
+#     arbitrary orientation.
+#     """
+#     return torch.tensor([[[1, 0, 0],
+#                             [0, 1, 0],
+#                             [0, 0, 1]],
+#                             [[1, 0, 0],
+#                             [0, 0, 1],
+#                             [0, 1, 0]],
+#                             [[0, 0, 1],
+#                             [1, 0, 0],
+#                             [0, 1, 0]]], dtype=torch.float32)
 
+# =============== XY, XZ, ZY projections ===========
 def generate_planes():
     """
     Defines planes by the three vectors that form the "axes" of the
@@ -33,8 +50,8 @@ def generate_planes():
                             [0, 0, 1],
                             [0, 1, 0]],
                             [[0, 0, 1],
-                            [1, 0, 0],
-                            [0, 1, 0]]], dtype=torch.float32)
+                            [0, 1, 0],
+                            [1, 0, 0]]], dtype=torch.float32)
 
 def project_onto_planes(planes, coordinates):
     """

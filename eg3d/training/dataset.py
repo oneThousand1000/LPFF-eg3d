@@ -37,6 +37,7 @@ class Dataset(torch.utils.data.Dataset):
         self._name = name
         self._raw_shape = list(raw_shape)
         self._use_labels = use_labels
+        assert self._use_labels == True
         self._raw_labels = None
         self._label_shape = None
 
@@ -48,6 +49,7 @@ class Dataset(torch.utils.data.Dataset):
 
         # Apply xflip.
         self._xflip = np.zeros(self._raw_idx.size, dtype=np.uint8)
+        assert xflip == False
         if xflip:
             self._raw_idx = np.tile(self._raw_idx, 2)
             self._xflip = np.concatenate([self._xflip, np.ones_like(self._xflip)])
@@ -163,24 +165,51 @@ class ImageFolderDataset(Dataset):
     def __init__(self,
         path,                   # Path to directory or zip.
         resolution      = None, # Ensure specific resolution, None = highest available.
+        camera_sample_mode = 'FFHQ',
         **super_kwargs,         # Additional arguments for the Dataset base class.
     ):
         self._path = path
         self._zipfile = None
+        self.camera_sample_mode = camera_sample_mode
 
+        valid_camera_sample_modes = [
+                    'FFHQ_LPFF',
+                    'FFHQ_LPFF_rebalanced',
+                    'LPFF', #
+                    'FFHQ_rebalanced',
+                    'FFHQ']
+        if self.camera_sample_mode not in valid_camera_sample_modes:
+            raise IOError(f'rebalance mode must be in {valid_camera_sample_modes}')
         if os.path.isdir(self._path):
             self._type = 'dir'
-            self._all_fnames = {os.path.relpath(os.path.join(root, fname), start=self._path) for root, _dirs, files in os.walk(self._path) for fname in files}
+            self._all_fnames = {os.path.relpath(os.path.join(root, fname), start=self._path) for root, _dirs, files in
+                                os.walk(self._path) for fname in files}
         elif self._file_ext(self._path) == '.zip':
             self._type = 'zip'
             self._all_fnames = set(self._get_zipfile().namelist())
         else:
             raise IOError('Path must point to a directory or zip')
 
+        # read name list
+        name_list_file_name = camera_sample_mode
+        name_list_file_name = f'{name_list_file_name}.json'
+        with self._open_file(name_list_file_name) as f:
+            name_list = json.load(f)
+
+        json_file_names = sorted(fname for fname in self._all_fnames if 'json' in fname)
+        self._all_fnames = name_list + json_file_names
+
         PIL.Image.init()
         self._image_fnames = sorted(fname for fname in self._all_fnames if self._file_ext(fname) in PIL.Image.EXTENSION)
         if len(self._image_fnames) == 0:
             raise IOError('No image files found in the specified path')
+
+        try:
+            snap_file = f'{self.camera_sample_mode}_snap_idxs.json'
+            with self._open_file(snap_file) as f:
+                self.snap_idxs = json.load(f)
+        except:
+            self.snap_idxs = [np.random.randint(len(self._image_fnames)) for _ in range(16)]
 
         name = os.path.splitext(os.path.basename(self._path))[0]
         raw_shape = [len(self._image_fnames)] + list(self._load_raw_image(0).shape)
@@ -229,6 +258,7 @@ class ImageFolderDataset(Dataset):
 
     def _load_raw_labels(self):
         fname = 'dataset.json'
+        assert fname in self._all_fnames
         if fname not in self._all_fnames:
             return None
         with self._open_file(fname) as f:

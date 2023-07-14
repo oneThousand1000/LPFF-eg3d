@@ -28,9 +28,19 @@ def compute_fid(opts, max_real, num_gen):
         opts=opts, detector_url=detector_url, detector_kwargs=detector_kwargs,
         rel_lo=0, rel_hi=0, capture_mean_cov=True, max_items=max_real).get_mean_cov()
 
-    mu_gen, sigma_gen = metric_utils.compute_feature_stats_for_generator(
-        opts=opts, detector_url=detector_url, detector_kwargs=detector_kwargs,
-        rel_lo=0, rel_hi=1, capture_mean_cov=True, max_items=num_gen).get_mean_cov()
+    # conditional_camera_sample_mode in [None, 'avg','FFHQ','LPFF']
+    if opts.conditional_camera_sample_mode is None:  #  c_g = c_r
+        mu_gen, sigma_gen = metric_utils.compute_feature_stats_for_generator(
+            opts=opts, detector_url=detector_url, detector_kwargs=detector_kwargs,
+            rel_lo=0, rel_hi=1, capture_mean_cov=True, max_items=num_gen).get_mean_cov()
+    elif opts.conditional_camera_sample_mode == 'avg':  #  c_g = c_avg
+        mu_gen, sigma_gen = metric_utils.compute_feature_stats_for_generator_conditioned_on_avg(
+            opts=opts, detector_url=detector_url, detector_kwargs=detector_kwargs,
+            rel_lo=0, rel_hi=1, capture_mean_cov=True, max_items=num_gen).get_mean_cov()
+    else: # c_g ~ Data
+        mu_gen, sigma_gen = metric_utils.compute_feature_stats_for_generator_conditioned_on_dataset(
+            opts=opts, detector_url=detector_url, detector_kwargs=detector_kwargs,
+            rel_lo=0, rel_hi=1, capture_mean_cov=True, max_items=num_gen).get_mean_cov()
 
     if opts.rank != 0:
         return float('nan')

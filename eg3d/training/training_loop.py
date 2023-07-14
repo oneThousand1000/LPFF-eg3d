@@ -29,13 +29,16 @@ import legacy
 from metrics import metric_main
 from camera_utils import LookAtPoseSampler
 from training.crosssection_utils import sample_cross_section
-
+from metrics import metric_utils
 #----------------------------------------------------------------------------
 
 def setup_snapshot_image_grid(training_set, random_seed=0):
     rnd = np.random.RandomState(random_seed)
-    gw = np.clip(7680 // training_set.image_shape[2], 7, 32)
-    gh = np.clip(4320 // training_set.image_shape[1], 4, 32)
+    # gw = np.clip(7680 // training_set.image_shape[2], 7, 32)
+    # gh = np.clip(4320 // training_set.image_shape[1], 4, 32)
+
+    gh = np.clip(7680 // training_set.image_shape[2], 7, 32)
+    gw = np.clip(5120 // training_set.image_shape[1], 4, 32)
 
     # No labels => show random subset of training samples.
     if not training_set.has_labels:
@@ -61,7 +64,8 @@ def setup_snapshot_image_grid(training_set, random_seed=0):
         # Organize into grid.
         grid_indices = []
         for y in range(gh):
-            label = label_order[y % len(label_order)]
+            #label = label_order[y % len(label_order)]
+            label = tuple(training_set.get_label(training_set.snap_idxs[y]).copy().flat[::-1])
             indices = label_groups[label]
             grid_indices += [indices[x % len(indices)] for x in range(gw)]
             label_groups[label] = [indices[(i + gw) % len(indices)] for i in range(len(indices))]
@@ -336,6 +340,9 @@ def training_loop(
         fields += [f"tick {training_stats.report0('Progress/tick', cur_tick):<5d}"]
         fields += [f"kimg {training_stats.report0('Progress/kimg', cur_nimg / 1e3):<8.1f}"]
         fields += [f"time {dnnlib.util.format_time(training_stats.report0('Timing/total_sec', tick_end_time - start_time)):<12s}"]
+        fields += [f"raw_resolution {training_stats.report0('Progress/raw_resolution', loss.neural_rendering_resolution_snap):<5.1f}"]
+        if loss.swap_prob_snap is not None:
+            fields += [f"swap prob {training_stats.report0('Progress/swap_prob', loss.swap_prob_snap):<2.5f}"]
         fields += [f"sec/tick {training_stats.report0('Timing/sec_per_tick', tick_end_time - tick_start_time):<7.1f}"]
         fields += [f"sec/kimg {training_stats.report0('Timing/sec_per_kimg', (tick_end_time - tick_start_time) / (cur_nimg - tick_start_nimg) * 1e3):<7.2f}"]
         fields += [f"maintenance {training_stats.report0('Timing/maintenance_sec', maintenance_time):<6.1f}"]
@@ -358,32 +365,33 @@ def training_loop(
 
         # Save image snapshot.
         if (rank == 0) and (image_snapshot_ticks is not None) and (done or cur_tick % image_snapshot_ticks == 0):
-            out = [G_ema(z=z, c=c, noise_mode='const') for z, c in zip(grid_z, grid_c)]
+            if (not G.rendering_kwargs['c_gen_conditioning_zero']) and not G.rendering_kwargs['c_gen_conditioning_avg']:
+                out = [G_ema(z=z, c=c, noise_mode='const') for z, c in zip(grid_z, grid_c)]
+                images = torch.cat([o['image'].cpu() for o in out]).numpy()
+                images_raw = torch.cat([o['image_raw'].cpu() for o in out]).numpy()
+                images_depth = -torch.cat([o['image_depth'].cpu() for o in out]).numpy()
+                save_image_grid(images, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}.png'), drange=[-1,1], grid_size=grid_size)
+                save_image_grid(images_raw, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_raw.png'), drange=[-1,1], grid_size=grid_size)
+                save_image_grid(images_depth, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_depth.png'), drange=[images_depth.min(), images_depth.max()], grid_size=grid_size)
+
+            # --------------------
+            # # Log forward-conditioned images
+
+            forward_cam2world_pose = LookAtPoseSampler.sample(np.pi/2, np.pi/2, torch.tensor([0, 0, 0.2], device=device), radius=2.7, device=device)
+            intrinsics = torch.tensor([[4.2647, 0, 0.5], [0, 4.2647, 0.5], [0, 0, 1]], device=device)
+            forward_label = torch.cat([forward_cam2world_pose.reshape(-1, 16), intrinsics.reshape(-1, 9)], 1)
+
+            grid_ws = [G_ema.mapping(z, forward_label.expand(z.shape[0], -1)) for z, c in zip(grid_z, grid_c)]
+            out = [G_ema.synthesis(ws, c=c, noise_mode='const') for ws, c in zip(grid_ws, grid_c)]
+
             images = torch.cat([o['image'].cpu() for o in out]).numpy()
             images_raw = torch.cat([o['image_raw'].cpu() for o in out]).numpy()
             images_depth = -torch.cat([o['image_depth'].cpu() for o in out]).numpy()
-            save_image_grid(images, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}.png'), drange=[-1,1], grid_size=grid_size)
-            save_image_grid(images_raw, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_raw.png'), drange=[-1,1], grid_size=grid_size)
-            save_image_grid(images_depth, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_depth.png'), drange=[images_depth.min(), images_depth.max()], grid_size=grid_size)
+            save_image_grid(images, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_f.png'), drange=[-1,1], grid_size=grid_size)
+            save_image_grid(images_raw, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_raw_f.png'), drange=[-1,1], grid_size=grid_size)
+            save_image_grid(images_depth, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_depth_f.png'), drange=[images_depth.min(), images_depth.max()], grid_size=grid_size)
 
-            #--------------------
-            # # Log forward-conditioned images
-
-            # forward_cam2world_pose = LookAtPoseSampler.sample(3.14/2, 3.14/2, torch.tensor([0, 0, 0.2], device=device), radius=2.7, device=device)
-            # intrinsics = torch.tensor([[4.2647, 0, 0.5], [0, 4.2647, 0.5], [0, 0, 1]], device=device)
-            # forward_label = torch.cat([forward_cam2world_pose.reshape(-1, 16), intrinsics.reshape(-1, 9)], 1)
-
-            # grid_ws = [G_ema.mapping(z, forward_label.expand(z.shape[0], -1)) for z, c in zip(grid_z, grid_c)]
-            # out = [G_ema.synthesis(ws, c=c, noise_mode='const') for ws, c in zip(grid_ws, grid_c)]
-
-            # images = torch.cat([o['image'].cpu() for o in out]).numpy()
-            # images_raw = torch.cat([o['image_raw'].cpu() for o in out]).numpy()
-            # images_depth = -torch.cat([o['image_depth'].cpu() for o in out]).numpy()
-            # save_image_grid(images, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_f.png'), drange=[-1,1], grid_size=grid_size)
-            # save_image_grid(images_raw, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_raw_f.png'), drange=[-1,1], grid_size=grid_size)
-            # save_image_grid(images_depth, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_depth_f.png'), drange=[images_depth.min(), images_depth.max()], grid_size=grid_size)
-
-            #--------------------
+            # --------------------
             # # Log Cross sections
 
             # grid_ws = [G_ema.mapping(z, c.expand(z.shape[0], -1)) for z, c in zip(grid_z, grid_c)]
@@ -414,8 +422,30 @@ def training_loop(
                 print(run_dir)
                 print('Evaluating metrics...')
             for metric in metrics:
-                result_dict = metric_main.calc_metric(metric=metric, G=snapshot_data['G_ema'],
-                    dataset_kwargs=training_set_kwargs, num_gpus=num_gpus, rank=rank, device=device)
+                if rank == 0:
+                    print('compute for ',training_set_kwargs['camera_sample_mode'])
+                # result_dict = metric_main.calc_metric(metric=metric, G=snapshot_data['G_ema'],
+                #     dataset_kwargs=training_set_kwargs, num_gpus=num_gpus, rank=rank, device=device)
+                if G.rendering_kwargs['c_gen_conditioning_avg']:
+                    conditional_dataset_kwargs = None
+                    conditional_camera_sample_mode = 'avg'
+                    print(
+                        f'********************* Sample mode: c_g = c_avg, c_r ~ {training_set_kwargs.camera_sample_mode}')
+                else:
+                    conditional_dataset_kwargs = training_set_kwargs.copy()
+                    conditional_camera_sample_mode = training_set_kwargs.camera_sample_mode
+                    print(
+                        f'********************* Sample mode: c_g ~ {training_set_kwargs.camera_sample_mode}, c_r ~ {training_set_kwargs.camera_sample_mode}')
+
+
+                progress = metric_utils.ProgressMonitor(verbose=True)
+                result_dict = metric_main.calc_metric(
+                    metric=metric, G=G,
+                    dataset_kwargs=training_set_kwargs,conditional_dataset_kwargs = conditional_dataset_kwargs,
+                    camera_sample_mode = training_set_kwargs.camera_sample_mode, conditional_camera_sample_mode = conditional_camera_sample_mode,
+                    num_gpus=num_gpus, rank=rank, device=device,
+                    progress=progress
+                )
                 if rank == 0:
                     metric_main.report_metric(result_dict, run_dir=run_dir, snapshot_pkl=snapshot_pkl)
                 stats_metrics.update(result_dict.results)

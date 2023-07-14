@@ -30,7 +30,15 @@ from torch_utils.ops import conv2d_gradfix
 
 def subprocess_fn(rank, args, temp_dir):
     dnnlib.util.Logger(should_flush=True)
-
+    if args.conditional_camera_sample_mode == None:
+        print(
+            f'********************* compute for network {args.network_pkl}, c_g = cr, c_r ~ {args.camera_sample_mode}')
+    elif args.conditional_camera_sample_mode == 'avg':
+        print(
+            f'********************* compute for network {args.network_pkl}, c_g = c_avg, c_r ~ {args.camera_sample_mode}')
+    else:
+        print(
+            f'********************* compute for network {args.network_pkl}, c_g ~ {args.conditional_camera_sample_mode}, c_r ~ {args.camera_sample_mode}')
     # Init torch.distributed.
     if args.num_gpus > 1:
         init_file = os.path.abspath(os.path.join(temp_dir, '.torch_distributed_init'))
@@ -65,7 +73,10 @@ def subprocess_fn(rank, args, temp_dir):
         if rank == 0 and args.verbose:
             print(f'Calculating {metric}...')
         progress = metric_utils.ProgressMonitor(verbose=args.verbose)
-        result_dict = metric_main.calc_metric(metric=metric, G=G, dataset_kwargs=args.dataset_kwargs,
+        result_dict = metric_main.calc_metric(
+            metric=metric, G=G,
+            dataset_kwargs=args.dataset_kwargs,conditional_dataset_kwargs =args.conditional_dataset_kwargs,
+            camera_sample_mode = args.camera_sample_mode, conditional_camera_sample_mode = args.conditional_camera_sample_mode,
             num_gpus=args.num_gpus, rank=rank, device=device, progress=progress)
         if rank == 0:
             metric_main.report_metric(result_dict, run_dir=args.run_dir, snapshot_pkl=args.network_pkl)
@@ -95,8 +106,10 @@ def parse_comma_separated_list(s):
 @click.option('--mirror', help='Enable dataset x-flips  [default: look up]', type=bool, metavar='BOOL')
 @click.option('--gpus', help='Number of GPUs to use', type=int, default=1, metavar='INT', show_default=True)
 @click.option('--verbose', help='Print optional information', type=bool, default=True, metavar='BOOL', show_default=True)
+@click.option('--conditional_camera_sample_mode', help='conditional_camera_sample_mode', type=str,default=None)
+@click.option('--camera_sample_mode', help='camera_sample_mode', type=str,required=True)
 
-def calc_metrics(ctx, network_pkl, metrics, data, mirror, gpus, verbose):
+def calc_metrics(ctx, network_pkl, metrics, data, mirror, gpus, verbose,conditional_camera_sample_mode,camera_sample_mode):
     """Calculate quality metrics for previous training run or pretrained network pickle.
 
     Examples:
@@ -128,10 +141,20 @@ def calc_metrics(ctx, network_pkl, metrics, data, mirror, gpus, verbose):
       pr50k3       Precision and recall against 50k real images.
       is50k        Inception score for CIFAR-10.
     """
+    # check conditional_camera_sample_mode
+    assert conditional_camera_sample_mode in [None, 'avg','FFHQ','LPFF']
+
+    # check camera_sample_mode
+    assert camera_sample_mode in ['FFHQ', 'LPFF']
+
     dnnlib.util.Logger(should_flush=True)
 
     # Validate arguments.
-    args = dnnlib.EasyDict(metrics=metrics, num_gpus=gpus, network_pkl=network_pkl, verbose=verbose)
+    args = dnnlib.EasyDict(
+        metrics=metrics, num_gpus=gpus, network_pkl=network_pkl, verbose=verbose,
+        conditional_camera_sample_mode = conditional_camera_sample_mode,
+        camera_sample_mode = camera_sample_mode
+                           )
     if not all(metric_main.is_valid_metric(metric) for metric in args.metrics):
         ctx.fail('\n'.join(['--metrics can only contain the following values:'] + metric_main.list_valid_metrics()))
     if not args.num_gpus >= 1:
@@ -146,9 +169,14 @@ def calc_metrics(ctx, network_pkl, metrics, data, mirror, gpus, verbose):
         network_dict = legacy.load_network_pkl(f)
         args.G = network_dict['G_ema'] # subclass of torch.nn.Module
 
+    args.conditional_dataset_kwargs = None
     # Initialize dataset options.
     if data is not None:
-        args.dataset_kwargs = dnnlib.EasyDict(class_name='training.dataset.ImageFolderDataset', path=data)
+        args.dataset_kwargs = dnnlib.EasyDict(class_name='training.dataset.ImageFolderDataset', path=data,camera_sample_mode = camera_sample_mode)
+        if conditional_camera_sample_mode is not None and conditional_camera_sample_mode != 'avg':
+            args.conditional_dataset_kwargs = dnnlib.EasyDict(class_name='training.dataset.ImageFolderDataset', path=data,
+                                                              camera_sample_mode=conditional_camera_sample_mode)
+
     elif network_dict['training_set_kwargs'] is not None:
         args.dataset_kwargs = dnnlib.EasyDict(network_dict['training_set_kwargs'])
     else:
@@ -160,11 +188,18 @@ def calc_metrics(ctx, network_pkl, metrics, data, mirror, gpus, verbose):
     if mirror is not None:
         args.dataset_kwargs.xflip = mirror
 
+    if conditional_camera_sample_mode is not None and conditional_camera_sample_mode != 'avg':
+        args.conditional_dataset_kwargs.resolution = args.G.img_resolution
+        args.conditional_dataset_kwargs.use_labels = (args.G.c_dim != 0)
+        if mirror is not None:
+            args.conditional_dataset_kwargs.xflip = mirror
+
     # Print dataset options.
     if args.verbose:
         print('Dataset options:')
         print(json.dumps(args.dataset_kwargs, indent=2))
-
+        if conditional_camera_sample_mode is not None and conditional_camera_sample_mode != 'avg':
+            print(json.dumps(args.conditional_dataset_kwargs, indent=2))
     # Locate run dir.
     args.run_dir = None
     if os.path.isfile(network_pkl):
